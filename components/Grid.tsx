@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { GridColumn, GridRow, GridCell, CellType } from '../types';
 import { Cell } from './Cell';
 import { ResizeHandle } from './ResizeHandle';
-import { Plus, Download, FileJson, FileSpreadsheet, FileCode, ChevronDown, X, FileText, Upload, Check, Pencil } from 'lucide-react';
+import { Plus, Download, FileJson, FileSpreadsheet, FileCode, ChevronDown, X, FileText, Upload, Check, Pencil, AlertTriangle } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
@@ -14,6 +14,8 @@ const INITIAL_ROWS = 4;
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
+const LOCAL_STORAGE_KEY = 'promptgrid_data';
+
 export const Grid: React.FC = () => {
   const [columns, setColumns] = useState<GridColumn[]>([]);
   const [rows, setRows] = useState<GridRow[]>([]);
@@ -21,9 +23,52 @@ export const Grid: React.FC = () => {
   const [sheetName, setSheetName] = useState("PromptGrid");
   const [editingColumnId, setEditingColumnId] = useState<string | null>(null);
   const [editingColumnLabel, setEditingColumnLabel] = useState<string>('');
+  const [showExitWarning, setShowExitWarning] = useState(false);
 
-  // Initialize Grid
+  // Check if grid has any data
+  const hasData = (): boolean => {
+    return rows.some(row =>
+      Object.values(row.cells).some((cell: GridCell) =>
+        cell && cell.content && cell.content.trim() !== ''
+      )
+    );
+  };
+
+  // Handle browser beforeunload event
   useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasData()) {
+        e.preventDefault();
+        e.returnValue = 'You have unsaved data. Are you sure you want to leave?';
+        return e.returnValue;
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [rows]);
+
+  // Initialize Grid - Load from localStorage or create new
+  useEffect(() => {
+    const savedData = localStorage.getItem(LOCAL_STORAGE_KEY);
+
+    if (savedData) {
+      try {
+        const parsed = JSON.parse(savedData);
+        if (parsed.columns && parsed.rows) {
+          setColumns(parsed.columns);
+          setRows(parsed.rows);
+          if (parsed.sheetName) {
+            setSheetName(parsed.sheetName);
+          }
+          return; // Data loaded successfully, skip initialization
+        }
+      } catch (e) {
+        console.warn('Failed to load saved data from localStorage:', e);
+      }
+    }
+
+    // No saved data or failed to load - initialize fresh grid
     const initCols: GridColumn[] = Array.from({ length: INITIAL_COLS }).map((_, i) => ({
       id: generateId(),
       label: `Col ${i + 1}`,
@@ -33,7 +78,7 @@ export const Grid: React.FC = () => {
     const initRows: GridRow[] = Array.from({ length: INITIAL_ROWS }).map(() => ({
       id: generateId(),
       height: DEFAULT_ROW_HEIGHT,
-      cells: {} // Empty initially, will auto-fill on render logic if needed or strictly mapped
+      cells: {}
     }));
 
     // Pre-populate cells map structure
@@ -50,6 +95,21 @@ export const Grid: React.FC = () => {
     setColumns(initCols);
     setRows(initRows);
   }, []);
+
+  // Save to localStorage whenever data changes
+  useEffect(() => {
+    // Don't save if grid hasn't been initialized yet
+    if (columns.length === 0 && rows.length === 0) return;
+
+    const dataToSave = {
+      columns,
+      rows,
+      sheetName,
+      savedAt: new Date().toISOString()
+    };
+
+    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(dataToSave));
+  }, [columns, rows, sheetName]);
 
   const handleColResize = (colId: string, delta: number) => {
     setColumns(prev => prev.map(col => {
@@ -145,7 +205,7 @@ export const Grid: React.FC = () => {
     if (!file) return;
 
     const reader = new FileReader();
-    
+
     reader.onload = (e) => {
       try {
         const data = e.target?.result;
@@ -177,7 +237,7 @@ export const Grid: React.FC = () => {
             height: DEFAULT_ROW_HEIGHT,
             cells: {}
           };
-          
+
           newColumns.forEach((col, colIndex) => {
             const cellValue = (rowData as unknown[])[colIndex];
             row.cells[col.id] = {
@@ -197,7 +257,7 @@ export const Grid: React.FC = () => {
         // Optionally set sheet name from file
         const fileName = file.name.replace(/\.[^/.]+$/, '');
         setSheetName(fileName);
-        
+
       } catch (error) {
         console.error('Import error:', error);
         alert('Failed to import file. Please ensure it is a valid Excel or CSV file.');
@@ -209,7 +269,7 @@ export const Grid: React.FC = () => {
     };
 
     reader.readAsBinaryString(file);
-    
+
     // Reset input so the same file can be imported again if needed
     event.target.value = '';
   };
@@ -286,17 +346,17 @@ export const Grid: React.FC = () => {
         ${rows.map(r => `
           <tr style="height: ${r.height}px">
             ${columns.map(c => {
-              const cell = r.cells[c.id];
-              let content = '';
-              if (cell) {
-                if (cell.type === 'IMAGE' && cell.content) {
-                  content = `<img src="${cell.content}" alt="Generated Image" />`;
-                } else {
-                  content = `<div class="cell-text">${cell.content || ''}</div>`;
-                }
-              }
-              return `<td>${content}</td>`;
-            }).join('')}
+      const cell = r.cells[c.id];
+      let content = '';
+      if (cell) {
+        if (cell.type === 'IMAGE' && cell.content) {
+          content = `<img src="${cell.content}" alt="Generated Image" />`;
+        } else {
+          content = `<div class="cell-text">${cell.content || ''}</div>`;
+        }
+      }
+      return `<td>${content}</td>`;
+    }).join('')}
           </tr>
         `).join('')}
       </tbody>
@@ -382,7 +442,7 @@ export const Grid: React.FC = () => {
     tempContainer.style.background = '#0f172a'; // Match theme
     tempContainer.style.padding = '20px';
     tempContainer.style.color = 'white';
-    
+
     // Construct HTML structure manually for the capture
     let tableHtml = `
       <h1 style="color: #818cf8; font-family: sans-serif; margin-bottom: 20px;">${sheetName}</h1>
@@ -396,20 +456,20 @@ export const Grid: React.FC = () => {
     `;
 
     rows.forEach(r => {
-        tableHtml += `<tr style="height: ${r.height}px;">`;
-        columns.forEach(c => {
-            const cell = r.cells[c.id];
-            let content = '';
-            if (cell) {
-                if (cell.type === 'IMAGE' && cell.content) {
-                    content = `<img src="${cell.content}" style="max-width: ${c.width - 24}px; max-height: ${r.height - 24}px; object-fit: contain;" />`;
-                } else {
-                     content = `<div style="white-space: pre-wrap; font-size: 14px;">${cell.content || ''}</div>`;
-                }
-            }
-            tableHtml += `<td style="border: 1px solid #334155; padding: 12px; vertical-align: top; background: #1e293b; width: ${c.width}px;">${content}</td>`;
-        });
-        tableHtml += '</tr>';
+      tableHtml += `<tr style="height: ${r.height}px;">`;
+      columns.forEach(c => {
+        const cell = r.cells[c.id];
+        let content = '';
+        if (cell) {
+          if (cell.type === 'IMAGE' && cell.content) {
+            content = `<img src="${cell.content}" style="max-width: ${c.width - 24}px; max-height: ${r.height - 24}px; object-fit: contain;" />`;
+          } else {
+            content = `<div style="white-space: pre-wrap; font-size: 14px;">${cell.content || ''}</div>`;
+          }
+        }
+        tableHtml += `<td style="border: 1px solid #334155; padding: 12px; vertical-align: top; background: #1e293b; width: ${c.width}px;">${content}</td>`;
+      });
+      tableHtml += '</tr>';
     });
 
     tableHtml += '</tbody></table>';
@@ -417,27 +477,27 @@ export const Grid: React.FC = () => {
     document.body.appendChild(tempContainer);
 
     try {
-        const canvas = await html2canvas(tempContainer, {
-            backgroundColor: '#0f172a',
-            logging: false,
-            scale: 2 // Better resolution
-        });
+      const canvas = await html2canvas(tempContainer, {
+        backgroundColor: '#0f172a',
+        logging: false,
+        scale: 2 // Better resolution
+      });
 
-        const imgData = canvas.toDataURL('image/png');
-        const pdf = new jsPDF({
-            orientation: canvas.width > canvas.height ? 'landscape' : 'portrait',
-            unit: 'px',
-            format: [canvas.width, canvas.height] // Custom format to fit the table exactly
-        });
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF({
+        orientation: canvas.width > canvas.height ? 'landscape' : 'portrait',
+        unit: 'px',
+        format: [canvas.width, canvas.height] // Custom format to fit the table exactly
+      });
 
-        pdf.addImage(imgData, 'PNG', 0, 0, canvas.width, canvas.height);
-        pdf.save(`${sheetName.toLowerCase().replace(/\s+/g, '-')}.pdf`);
+      pdf.addImage(imgData, 'PNG', 0, 0, canvas.width, canvas.height);
+      pdf.save(`${sheetName.toLowerCase().replace(/\s+/g, '-')}.pdf`);
     } catch (err) {
-        console.error("PDF Export failed", err);
-        alert("Failed to export PDF");
+      console.error("PDF Export failed", err);
+      alert("Failed to export PDF");
     } finally {
-        document.body.removeChild(tempContainer);
-        setShowExportMenu(false);
+      document.body.removeChild(tempContainer);
+      setShowExportMenu(false);
     }
   };
 
@@ -446,7 +506,7 @@ export const Grid: React.FC = () => {
       {/* Toolbar */}
       <div className="h-14 border-b border-slate-800 bg-slate-900 flex items-center px-4 justify-between shrink-0 z-30">
         <div className="flex items-center gap-4">
-          <input 
+          <input
             type="text"
             value={sheetName}
             onChange={(e) => setSheetName(e.target.value)}
@@ -454,34 +514,34 @@ export const Grid: React.FC = () => {
             title="Rename Sheet"
           />
           <div className="h-6 w-px bg-slate-700 mx-2"></div>
-          <button 
+          <button
             onClick={addColumn}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded text-sm transition-colors"
           >
             <Plus size={16} /> Add Column
           </button>
-          <button 
+          <button
             onClick={addRow}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded text-sm transition-colors"
           >
             <Plus size={16} /> Add Row
           </button>
           <div className="h-6 w-px bg-slate-700 mx-2"></div>
-          <label 
+          <label
             className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm transition-colors cursor-pointer"
           >
             <Upload size={16} /> Import
-            <input 
-              type="file" 
-              accept=".xlsx,.xls,.csv" 
+            <input
+              type="file"
+              accept=".xlsx,.xls,.csv"
               onChange={handleImportFile}
               className="hidden"
             />
           </label>
         </div>
-        
+
         <div className="relative">
-          <button 
+          <button
             onClick={() => setShowExportMenu(!showExportMenu)}
             className="flex items-center gap-2 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-sm transition-colors shadow-sm"
           >
@@ -490,25 +550,25 @@ export const Grid: React.FC = () => {
 
           {showExportMenu && (
             <div className="absolute right-0 top-full mt-2 w-48 bg-slate-800 border border-slate-700 rounded-md shadow-xl z-50 overflow-hidden">
-              <button 
+              <button
                 onClick={exportJson}
                 className="flex items-center gap-3 w-full px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700 hover:text-white text-left transition-colors"
               >
                 <FileJson size={16} className="text-yellow-400" /> JSON (Backup)
               </button>
-              <button 
+              <button
                 onClick={exportHtml}
                 className="flex items-center gap-3 w-full px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700 hover:text-white text-left transition-colors border-t border-slate-700/50"
               >
                 <FileCode size={16} className="text-orange-400" /> HTML (Visual)
               </button>
-              <button 
+              <button
                 onClick={exportPdf}
                 className="flex items-center gap-3 w-full px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700 hover:text-white text-left transition-colors border-t border-slate-700/50"
               >
                 <FileText size={16} className="text-red-400" /> PDF (Print)
               </button>
-              <button 
+              <button
                 onClick={exportExcel}
                 className="flex items-center gap-3 w-full px-4 py-2.5 text-sm text-slate-200 hover:bg-slate-700 hover:text-white text-left transition-colors border-t border-slate-700/50"
               >
@@ -516,7 +576,7 @@ export const Grid: React.FC = () => {
               </button>
             </div>
           )}
-          
+
           {/* Overlay to close menu on click outside */}
           {showExportMenu && (
             <div className="fixed inset-0 z-40" onClick={() => setShowExportMenu(false)}></div>
@@ -527,15 +587,15 @@ export const Grid: React.FC = () => {
       {/* Grid Area */}
       <div className="flex-1 overflow-auto relative">
         <div className="inline-block align-top relative min-w-full">
-          
+
           {/* Header Row */}
           <div className="sticky top-0 z-20 flex bg-slate-900 shadow-md">
             {/* Corner Cell */}
             <div className="w-12 shrink-0 border-r border-b border-slate-800 bg-slate-900 sticky left-0 z-30"></div>
-            
+
             {columns.map(col => (
-              <div 
-                key={col.id} 
+              <div
+                key={col.id}
                 className="relative shrink-0 h-10 flex items-center justify-center border-r border-b border-slate-800 text-xs font-semibold text-slate-400 uppercase tracking-wider select-none group/header"
                 style={{ width: col.width }}
                 onDoubleClick={() => startEditingColumn(col.id, col.label)}
@@ -568,7 +628,7 @@ export const Grid: React.FC = () => {
                 ) : (
                   <>
                     <span className="truncate px-4" title={col.label}>{col.label}</span>
-                    
+
                     {/* Edit Column Button */}
                     <button
                       onClick={(e) => {
@@ -580,7 +640,7 @@ export const Grid: React.FC = () => {
                     >
                       <Pencil size={12} />
                     </button>
-                    
+
                     {/* Delete Column Button */}
                     <button
                       onClick={(e) => {
@@ -595,9 +655,9 @@ export const Grid: React.FC = () => {
                   </>
                 )}
 
-                <ResizeHandle 
-                  orientation="horizontal" 
-                  onResize={(delta) => handleColResize(col.id, delta)} 
+                <ResizeHandle
+                  orientation="horizontal"
+                  onResize={(delta) => handleColResize(col.id, delta)}
                 />
               </div>
             ))}
@@ -607,16 +667,16 @@ export const Grid: React.FC = () => {
           <div className="relative">
             {rows.map((row, index) => (
               <div key={row.id} className="flex relative group/row">
-                
+
                 {/* Row Header (Number + Resize) */}
-                <div 
+                <div
                   className="sticky left-0 z-10 w-12 shrink-0 bg-slate-900 border-r border-b border-slate-800 flex items-center justify-center text-xs text-slate-500 font-mono select-none"
                   style={{ height: row.height }}
                 >
                   {index + 1}
-                  <ResizeHandle 
-                    orientation="vertical" 
-                    onResize={(delta) => handleRowResize(row.id, delta)} 
+                  <ResizeHandle
+                    orientation="vertical"
+                    onResize={(delta) => handleRowResize(row.id, delta)}
                   />
                 </div>
 
@@ -625,16 +685,16 @@ export const Grid: React.FC = () => {
                   const cell = row.cells[col.id];
                   return (
                     <div key={`${row.id}-${col.id}`} className="shrink-0" style={{ width: col.width, height: row.height }}>
-                       {cell ? (
-                         <Cell 
-                           cell={cell}
-                           rowId={row.id}
-                           colId={col.id}
-                           width={col.width}
-                           height={row.height}
-                           onChange={(newCell) => handleCellChange(row.id, col.id, newCell)}
-                         />
-                       ) : <div className="w-full h-full bg-slate-950 border-r border-b border-slate-800" />}
+                      {cell ? (
+                        <Cell
+                          cell={cell}
+                          rowId={row.id}
+                          colId={col.id}
+                          width={col.width}
+                          height={row.height}
+                          onChange={(newCell) => handleCellChange(row.id, col.id, newCell)}
+                        />
+                      ) : <div className="w-full h-full bg-slate-950 border-r border-b border-slate-800" />}
                     </div>
                   );
                 })}
@@ -646,6 +706,76 @@ export const Grid: React.FC = () => {
           <div className="h-full w-full absolute -z-10 bg-slate-950"></div>
         </div>
       </div>
+
+      {/* Exit Warning Modal */}
+      {showExitWarning && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-slate-800 border border-slate-700 rounded-xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
+            {/* Header */}
+            <div className="bg-amber-500/10 border-b border-slate-700 px-6 py-4 flex items-center gap-3">
+              <div className="bg-amber-500/20 p-2 rounded-full">
+                <AlertTriangle className="text-amber-400" size={24} />
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold text-slate-100">Unsaved Data</h2>
+                <p className="text-sm text-slate-400">You have data that hasn't been exported</p>
+              </div>
+            </div>
+
+            {/* Content */}
+            <div className="px-6 py-5">
+              <p className="text-slate-300 mb-4">Would you like to export your work before leaving?</p>
+
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => { exportJson(); setShowExitWarning(false); }}
+                  className="flex items-center justify-center gap-2 px-4 py-3 bg-slate-700 hover:bg-slate-600 border border-slate-600 rounded-lg text-sm text-slate-200 transition-colors"
+                >
+                  <FileJson size={18} className="text-yellow-400" />
+                  JSON
+                </button>
+                <button
+                  onClick={() => { exportExcel(); setShowExitWarning(false); }}
+                  className="flex items-center justify-center gap-2 px-4 py-3 bg-slate-700 hover:bg-slate-600 border border-slate-600 rounded-lg text-sm text-slate-200 transition-colors"
+                >
+                  <FileSpreadsheet size={18} className="text-green-400" />
+                  Excel
+                </button>
+                <button
+                  onClick={() => { exportHtml(); setShowExitWarning(false); }}
+                  className="flex items-center justify-center gap-2 px-4 py-3 bg-slate-700 hover:bg-slate-600 border border-slate-600 rounded-lg text-sm text-slate-200 transition-colors"
+                >
+                  <FileCode size={18} className="text-orange-400" />
+                  HTML
+                </button>
+                <button
+                  onClick={() => { exportPdf(); setShowExitWarning(false); }}
+                  className="flex items-center justify-center gap-2 px-4 py-3 bg-slate-700 hover:bg-slate-600 border border-slate-600 rounded-lg text-sm text-slate-200 transition-colors"
+                >
+                  <FileText size={18} className="text-red-400" />
+                  PDF
+                </button>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="bg-slate-900/50 border-t border-slate-700 px-6 py-4 flex justify-end gap-3">
+              <button
+                onClick={() => setShowExitWarning(false)}
+                className="px-4 py-2 text-sm text-slate-400 hover:text-slate-200 transition-colors"
+              >
+                Continue Editing
+              </button>
+              <button
+                onClick={() => setShowExitWarning(false)}
+                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-sm rounded-lg transition-colors"
+              >
+                Leave Without Saving
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
