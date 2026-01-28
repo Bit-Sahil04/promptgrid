@@ -6,7 +6,7 @@ import { Plus, Download, FileJson, FileSpreadsheet, FileCode, ChevronDown, X, Fi
 import * as XLSX from 'xlsx';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
-import { saveImage, getAllImages, deleteImage } from '../services/imageStorage';
+import { saveImage, getAllImages, deleteImage, clearAllImages } from '../services/imageStorage';
 
 const DEFAULT_COL_WIDTH = 200;
 const DEFAULT_ROW_HEIGHT = 150;
@@ -25,6 +25,32 @@ export const Grid: React.FC = () => {
   const [editingColumnId, setEditingColumnId] = useState<string | null>(null);
   const [editingColumnLabel, setEditingColumnLabel] = useState<string>('');
   const [showExitWarning, setShowExitWarning] = useState(false);
+  const [showMultiTabWarning, setShowMultiTabWarning] = useState(false);
+
+  // Multi-tab detection using BroadcastChannel
+  useEffect(() => {
+    const channel = new BroadcastChannel('promptgrid_tab_channel');
+    const tabId = Math.random().toString(36).substr(2, 9);
+
+    // Announce this tab
+    channel.postMessage({ type: 'TAB_OPEN', tabId });
+
+    // Listen for other tabs
+    channel.onmessage = (event) => {
+      if (event.data.type === 'TAB_OPEN' && event.data.tabId !== tabId) {
+        setShowMultiTabWarning(true);
+        // Also notify the other tab
+        channel.postMessage({ type: 'TAB_EXISTS', tabId });
+      }
+      if (event.data.type === 'TAB_EXISTS' && event.data.tabId !== tabId) {
+        setShowMultiTabWarning(true);
+      }
+    };
+
+    return () => {
+      channel.close();
+    };
+  }, []);
 
   // Check if grid has any data
   const hasData = (): boolean => {
@@ -210,6 +236,15 @@ export const Grid: React.FC = () => {
   const handleCellChange = (rowId: string, colId: string, newCell: GridCell) => {
     setRows(prev => prev.map(row => {
       if (row.id === rowId) {
+        const oldCell = row.cells[colId];
+
+        // If old cell was an image and new cell is not (or is empty), clean up IndexedDB
+        if (oldCell && oldCell.type === CellType.IMAGE && oldCell.id) {
+          if (newCell.type !== CellType.IMAGE || !newCell.content) {
+            deleteImage(oldCell.id).catch(e => console.warn('Failed to delete orphaned image:', e));
+          }
+        }
+
         return {
           ...row,
           cells: {
@@ -251,9 +286,15 @@ export const Grid: React.FC = () => {
       }
     }
 
+    // Clean up images from IndexedDB for this column
+    rows.forEach(row => {
+      const cell = row.cells[colId];
+      if (cell && cell.type === CellType.IMAGE && cell.id) {
+        deleteImage(cell.id).catch(e => console.warn('Failed to delete column image:', e));
+      }
+    });
+
     setColumns(prev => prev.filter(c => c.id !== colId));
-    // We don't strictly need to clean up the cells in rows as they are keyed by ID, 
-    // but ignoring them is fine for performance.
   };
 
   const handleColumnLabelChange = (colId: string, newLabel: string) => {
@@ -327,6 +368,9 @@ export const Grid: React.FC = () => {
 
           return row;
         });
+
+        // Clear all images from IndexedDB before importing new data
+        clearAllImages().catch(e => console.warn('Failed to clear IndexedDB images:', e));
 
         // Update grid state
         setColumns(newColumns);
@@ -852,6 +896,25 @@ export const Grid: React.FC = () => {
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Multi-Tab Warning Banner */}
+      {showMultiTabWarning && (
+        <div className="fixed top-0 left-0 right-0 z-50 bg-amber-600 text-white px-4 py-3 flex items-center justify-between shadow-lg">
+          <div className="flex items-center gap-3">
+            <AlertTriangle size={20} />
+            <span className="text-sm font-medium">
+              ⚠️ Multiple tabs detected! Editing in multiple tabs may cause data conflicts. Please close other tabs.
+            </span>
+          </div>
+          <button
+            onClick={() => setShowMultiTabWarning(false)}
+            className="p-1 hover:bg-amber-700 rounded transition-colors"
+            title="Dismiss"
+          >
+            <X size={18} />
+          </button>
         </div>
       )}
     </div>
