@@ -52,28 +52,7 @@ export const Grid: React.FC = () => {
     };
   }, []);
 
-  // Check if grid has any data
-  const hasData = (): boolean => {
-    return rows.some(row =>
-      Object.values(row.cells).some((cell: GridCell) =>
-        cell && cell.content && cell.content.trim() !== ''
-      )
-    );
-  };
 
-  // Handle browser beforeunload event
-  useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (hasData()) {
-        e.preventDefault();
-        e.returnValue = 'You have unsaved data. Are you sure you want to leave?';
-        return e.returnValue;
-      }
-    };
-
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [rows]);
 
   // Initialize Grid - Load from localStorage and IndexedDB
   useEffect(() => {
@@ -323,6 +302,39 @@ export const Grid: React.FC = () => {
     const file = event.target.files?.[0];
     if (!file) return;
 
+    const fileExtension = file.name.split('.').pop()?.toLowerCase();
+
+    // Handle JSON files (PromptGrid backup format)
+    if (fileExtension === 'json') {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const jsonContent = JSON.parse(e.target?.result as string);
+
+          if (jsonContent.columns && jsonContent.rows) {
+            // Clear all images from IndexedDB before importing new data
+            clearAllImages().catch(err => console.warn('Failed to clear IndexedDB images:', err));
+
+            setColumns(jsonContent.columns);
+            setRows(jsonContent.rows);
+            if (jsonContent.sheetName) {
+              setSheetName(jsonContent.sheetName);
+            }
+          } else {
+            alert('Invalid JSON format. Please use a PromptGrid JSON export file.');
+          }
+        } catch (error) {
+          console.error('JSON import error:', error);
+          alert('Failed to import JSON file. Please ensure it is a valid PromptGrid JSON export.');
+        }
+      };
+      reader.onerror = () => alert('Failed to read JSON file.');
+      reader.readAsText(file);
+      event.target.value = '';
+      return;
+    }
+
+    // Handle Excel/CSV files
     const reader = new FileReader();
 
     reader.onload = (e) => {
@@ -370,7 +382,7 @@ export const Grid: React.FC = () => {
         });
 
         // Clear all images from IndexedDB before importing new data
-        clearAllImages().catch(e => console.warn('Failed to clear IndexedDB images:', e));
+        clearAllImages().catch(err => console.warn('Failed to clear IndexedDB images:', err));
 
         // Update grid state
         setColumns(newColumns);
@@ -655,7 +667,7 @@ export const Grid: React.FC = () => {
             <Upload size={16} /> Import
             <input
               type="file"
-              accept=".xlsx,.xls,.csv"
+              accept=".xlsx,.xls,.csv,.json"
               onChange={handleImportFile}
               className="hidden"
             />
