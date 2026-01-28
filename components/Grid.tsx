@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { GridColumn, GridRow, GridCell, CellType } from '../types';
 import { Cell } from './Cell';
 import { ResizeHandle } from './ResizeHandle';
-import { Plus, Download, FileJson, FileSpreadsheet, FileCode, ChevronDown, X, FileText } from 'lucide-react';
+import { Plus, Download, FileJson, FileSpreadsheet, FileCode, ChevronDown, X, FileText, Upload, Check, Pencil } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
@@ -19,6 +19,8 @@ export const Grid: React.FC = () => {
   const [rows, setRows] = useState<GridRow[]>([]);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [sheetName, setSheetName] = useState("PromptGrid");
+  const [editingColumnId, setEditingColumnId] = useState<string | null>(null);
+  const [editingColumnLabel, setEditingColumnLabel] = useState<string>('');
 
   // Initialize Grid
   useEffect(() => {
@@ -114,6 +116,102 @@ export const Grid: React.FC = () => {
     setColumns(prev => prev.filter(c => c.id !== colId));
     // We don't strictly need to clean up the cells in rows as they are keyed by ID, 
     // but ignoring them is fine for performance.
+  };
+
+  const handleColumnLabelChange = (colId: string, newLabel: string) => {
+    setColumns(prev => prev.map(col => {
+      if (col.id === colId) {
+        return { ...col, label: newLabel };
+      }
+      return col;
+    }));
+  };
+
+  const startEditingColumn = (colId: string, currentLabel: string) => {
+    setEditingColumnId(colId);
+    setEditingColumnLabel(currentLabel);
+  };
+
+  const finishEditingColumn = () => {
+    if (editingColumnId && editingColumnLabel.trim()) {
+      handleColumnLabelChange(editingColumnId, editingColumnLabel.trim());
+    }
+    setEditingColumnId(null);
+    setEditingColumnLabel('');
+  };
+
+  const handleImportFile = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    
+    reader.onload = (e) => {
+      try {
+        const data = e.target?.result;
+        const workbook = XLSX.read(data, { type: 'binary' });
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        const jsonData = XLSX.utils.sheet_to_json<string[]>(worksheet, { header: 1 });
+
+        if (jsonData.length === 0) {
+          alert('The file appears to be empty.');
+          return;
+        }
+
+        // First row is headers
+        const headers = jsonData[0] as string[];
+        const dataRows = jsonData.slice(1);
+
+        // Create new columns
+        const newColumns: GridColumn[] = headers.map((header, i) => ({
+          id: generateId(),
+          label: header?.toString() || `Col ${i + 1}`,
+          width: DEFAULT_COL_WIDTH
+        }));
+
+        // Create new rows with cells
+        const newRows: GridRow[] = dataRows.map((rowData) => {
+          const row: GridRow = {
+            id: generateId(),
+            height: DEFAULT_ROW_HEIGHT,
+            cells: {}
+          };
+          
+          newColumns.forEach((col, colIndex) => {
+            const cellValue = (rowData as unknown[])[colIndex];
+            row.cells[col.id] = {
+              id: generateId(),
+              type: CellType.TEXT,
+              content: cellValue?.toString() || ''
+            };
+          });
+
+          return row;
+        });
+
+        // Update grid state
+        setColumns(newColumns);
+        setRows(newRows);
+
+        // Optionally set sheet name from file
+        const fileName = file.name.replace(/\.[^/.]+$/, '');
+        setSheetName(fileName);
+        
+      } catch (error) {
+        console.error('Import error:', error);
+        alert('Failed to import file. Please ensure it is a valid Excel or CSV file.');
+      }
+    };
+
+    reader.onerror = () => {
+      alert('Failed to read file.');
+    };
+
+    reader.readAsBinaryString(file);
+    
+    // Reset input so the same file can be imported again if needed
+    event.target.value = '';
   };
 
   const addRow = () => {
@@ -368,6 +466,18 @@ export const Grid: React.FC = () => {
           >
             <Plus size={16} /> Add Row
           </button>
+          <div className="h-6 w-px bg-slate-700 mx-2"></div>
+          <label 
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-sm transition-colors cursor-pointer"
+          >
+            <Upload size={16} /> Import
+            <input 
+              type="file" 
+              accept=".xlsx,.xls,.csv" 
+              onChange={handleImportFile}
+              className="hidden"
+            />
+          </label>
         </div>
         
         <div className="relative">
@@ -428,20 +538,62 @@ export const Grid: React.FC = () => {
                 key={col.id} 
                 className="relative shrink-0 h-10 flex items-center justify-center border-r border-b border-slate-800 text-xs font-semibold text-slate-400 uppercase tracking-wider select-none group/header"
                 style={{ width: col.width }}
+                onDoubleClick={() => startEditingColumn(col.id, col.label)}
               >
-                {col.label}
-                
-                {/* Delete Column Button */}
-                <button
-                    onClick={(e) => {
+                {editingColumnId === col.id ? (
+                  <div className="flex items-center gap-1 px-2">
+                    <input
+                      type="text"
+                      value={editingColumnLabel}
+                      onChange={(e) => setEditingColumnLabel(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') finishEditingColumn();
+                        if (e.key === 'Escape') {
+                          setEditingColumnId(null);
+                          setEditingColumnLabel('');
+                        }
+                      }}
+                      onBlur={finishEditingColumn}
+                      autoFocus
+                      className="bg-slate-800 border border-indigo-500 rounded px-2 py-0.5 text-sm text-slate-200 outline-none w-full max-w-[120px]"
+                    />
+                    <button
+                      onClick={finishEditingColumn}
+                      className="text-green-400 hover:text-green-300 p-0.5"
+                      title="Save"
+                    >
+                      <Check size={14} />
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <span className="truncate px-4" title={col.label}>{col.label}</span>
+                    
+                    {/* Edit Column Button */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        startEditingColumn(col.id, col.label);
+                      }}
+                      className="absolute left-2 top-2 opacity-0 group-hover/header:opacity-100 hover:bg-indigo-500/20 hover:text-indigo-400 p-0.5 rounded transition-all z-40"
+                      title="Rename Column"
+                    >
+                      <Pencil size={12} />
+                    </button>
+                    
+                    {/* Delete Column Button */}
+                    <button
+                      onClick={(e) => {
                         e.stopPropagation();
                         deleteColumn(col.id);
-                    }}
-                    className="absolute right-2 top-2 opacity-0 group-hover/header:opacity-100 hover:bg-red-500/20 hover:text-red-400 p-0.5 rounded transition-all z-40"
-                    title="Delete Column"
-                >
-                    <X size={12} />
-                </button>
+                      }}
+                      className="absolute right-2 top-2 opacity-0 group-hover/header:opacity-100 hover:bg-red-500/20 hover:text-red-400 p-0.5 rounded transition-all z-40"
+                      title="Delete Column"
+                    >
+                      <X size={12} />
+                    </button>
+                  </>
+                )}
 
                 <ResizeHandle 
                   orientation="horizontal" 
