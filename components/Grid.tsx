@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { GridColumn, GridRow, GridCell, CellType } from '../types';
 import { Cell } from './Cell';
 import { ResizeHandle } from './ResizeHandle';
-import { Plus, Download, FileJson, FileSpreadsheet, FileCode, ChevronDown, X, FileText, Upload, Check, Pencil, AlertTriangle } from 'lucide-react';
+import { Plus, Download, FileJson, FileSpreadsheet, FileCode, ChevronDown, X, FileText, Upload, Check, Pencil, AlertTriangle, GripVertical } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
@@ -26,6 +26,12 @@ export const Grid: React.FC = () => {
   const [editingColumnLabel, setEditingColumnLabel] = useState<string>('');
   const [showExitWarning, setShowExitWarning] = useState(false);
   const [showMultiTabWarning, setShowMultiTabWarning] = useState(false);
+
+  // Drag-and-drop state
+  const [draggedRowId, setDraggedRowId] = useState<string | null>(null);
+  const [draggedColId, setDraggedColId] = useState<string | null>(null);
+  const [dropTargetRowId, setDropTargetRowId] = useState<string | null>(null);
+  const [dropTargetColId, setDropTargetColId] = useState<string | null>(null);
 
   // Multi-tab detection using BroadcastChannel
   useEffect(() => {
@@ -210,6 +216,86 @@ export const Grid: React.FC = () => {
       }
       return row;
     }));
+  };
+
+  // Row drag-and-drop handlers
+  const handleRowDragStart = (e: React.DragEvent, rowId: string) => {
+    setDraggedRowId(rowId);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleRowDragOver = (e: React.DragEvent, rowId: string) => {
+    e.preventDefault();
+    if (draggedRowId && draggedRowId !== rowId) {
+      setDropTargetRowId(rowId);
+    }
+  };
+
+  const handleRowDragLeave = () => {
+    setDropTargetRowId(null);
+  };
+
+  const handleRowDrop = (e: React.DragEvent, targetRowId: string) => {
+    e.preventDefault();
+    if (draggedRowId && draggedRowId !== targetRowId) {
+      setRows(prev => {
+        const draggedIndex = prev.findIndex(r => r.id === draggedRowId);
+        const targetIndex = prev.findIndex(r => r.id === targetRowId);
+        if (draggedIndex === -1 || targetIndex === -1) return prev;
+
+        const newRows = [...prev];
+        const [draggedRow] = newRows.splice(draggedIndex, 1);
+        newRows.splice(targetIndex, 0, draggedRow);
+        return newRows;
+      });
+    }
+    setDraggedRowId(null);
+    setDropTargetRowId(null);
+  };
+
+  const handleRowDragEnd = () => {
+    setDraggedRowId(null);
+    setDropTargetRowId(null);
+  };
+
+  // Column drag-and-drop handlers
+  const handleColDragStart = (e: React.DragEvent, colId: string) => {
+    setDraggedColId(colId);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleColDragOver = (e: React.DragEvent, colId: string) => {
+    e.preventDefault();
+    if (draggedColId && draggedColId !== colId) {
+      setDropTargetColId(colId);
+    }
+  };
+
+  const handleColDragLeave = () => {
+    setDropTargetColId(null);
+  };
+
+  const handleColDrop = (e: React.DragEvent, targetColId: string) => {
+    e.preventDefault();
+    if (draggedColId && draggedColId !== targetColId) {
+      setColumns(prev => {
+        const draggedIndex = prev.findIndex(c => c.id === draggedColId);
+        const targetIndex = prev.findIndex(c => c.id === targetColId);
+        if (draggedIndex === -1 || targetIndex === -1) return prev;
+
+        const newCols = [...prev];
+        const [draggedCol] = newCols.splice(draggedIndex, 1);
+        newCols.splice(targetIndex, 0, draggedCol);
+        return newCols;
+      });
+    }
+    setDraggedColId(null);
+    setDropTargetColId(null);
+  };
+
+  const handleColDragEnd = () => {
+    setDraggedColId(null);
+    setDropTargetColId(null);
   };
 
   const handleCellChange = (rowId: string, colId: string, newCell: GridCell) => {
@@ -465,6 +551,30 @@ export const Grid: React.FC = () => {
     .resizer:hover, .resizing {
       background: #3b82f6;
     }
+    .resizer:hover, .resizing {
+      background: #3b82f6;
+    }
+    
+    /* Image Preview Button */
+    .image-container { position: relative; display: inline-block; }
+    .preview-btn {
+      position: absolute;
+      bottom: 4px;
+      right: 4px;
+      background: rgba(99, 102, 241, 0.9);
+      color: white;
+      border: none;
+      border-radius: 4px;
+      padding: 4px;
+      cursor: pointer;
+      opacity: 0;
+      transition: opacity 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .image-container:hover .preview-btn { opacity: 1; }
+    .preview-btn:hover { background: #4f46e5; }
   </style>
 </head>
 <body>
@@ -484,12 +594,19 @@ export const Grid: React.FC = () => {
       let content = '';
       if (cell) {
         if (cell.type === 'IMAGE' && cell.content) {
-          content = `<img src="${cell.content}" alt="Generated Image" />`;
+          content = `
+            <div class="image-container">
+              <img src="${cell.content}" alt="Generated Image" />
+              <button class="preview-btn" onclick="openImage(this)" title="Open in New Tab">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+              </button>
+            </div>
+          `;
         } else {
-          content = `<div class="cell-text">${cell.content || ''}</div>`;
+          content = `< div class="cell-text" > ${cell.content || ''}</div > `;
         }
       }
-      return `<td>${content}</td>`;
+      return `< td > ${content}</td > `;
     }).join('')}
           </tr>
         `).join('')}
@@ -532,6 +649,26 @@ export const Grid: React.FC = () => {
 
       resizer.addEventListener('mousedown', mouseDownHandler);
     }
+
+    function openImage(btn) {
+      // Find the image source
+      const img = btn.previousElementSibling;
+      if (img && img.tagName === 'IMG') {
+        const content = img.src;
+        
+        // Convert base64 to blob for reliable opening
+        const byteString = atob(content.split(',')[1]);
+        const mimeType = content.match(/data:([^;]+)/)?.[1] || 'image/png';
+        const ab = new ArrayBuffer(byteString.length);
+        const ia = new Uint8Array(ab);
+        for (let i = 0; i < byteString.length; i++) {
+          ia[i] = byteString.charCodeAt(i);
+        }
+        const blob = new Blob([ab], { type: mimeType });
+        const blobUrl = URL.createObjectURL(blob);
+        window.open(blobUrl, '_blank');
+      }
+    }
   </script>
 </body>
 </html>
@@ -566,42 +703,76 @@ export const Grid: React.FC = () => {
   };
 
   const exportPdf = async () => {
-    // We create a temporary hidden div to render the full table for the PDF
-    // This allows capturing the full scrollable area
+    // Create a temporary hidden div to render the full table for the PDF
+    // This renders off-screen so the UI doesn't flicker
     const tempContainer = document.createElement('div');
-    tempContainer.style.position = 'absolute';
-    tempContainer.style.top = '-9999px';
-    tempContainer.style.left = '-9999px';
-    tempContainer.style.width = 'max-content'; // Allow full width
-    tempContainer.style.background = '#0f172a'; // Match theme
+    tempContainer.style.position = 'fixed';
+    tempContainer.style.top = '-99999px';
+    tempContainer.style.left = '-99999px';
+    tempContainer.style.width = 'max-content';
+    tempContainer.style.background = '#0f172a';
     tempContainer.style.padding = '20px';
     tempContainer.style.color = 'white';
+    tempContainer.style.visibility = 'hidden';
 
-    // Construct HTML structure manually for the capture
+    // Calculate optimal column widths based on text content
+    const optimalWidths = columns.map(col => {
+      let maxWidth = 120; // Minimum width
+      rows.forEach(row => {
+        const cell = row.cells[col.id];
+        if (cell && cell.type === CellType.TEXT && cell.content) {
+          // Estimate width: ~8px per character, max 400px
+          const estimatedWidth = Math.min(400, Math.max(120, cell.content.length * 8));
+          maxWidth = Math.max(maxWidth, estimatedWidth);
+        } else if (cell && cell.type === CellType.IMAGE) {
+          maxWidth = Math.max(maxWidth, 200); // Fixed width for images
+        }
+      });
+      return maxWidth;
+    });
+
+    // Calculate optimal row heights
+    const optimalHeights = rows.map(row => {
+      let maxHeight = 40; // Minimum height
+      columns.forEach((col, colIndex) => {
+        const cell = row.cells[col.id];
+        if (cell && cell.type === CellType.TEXT && cell.content) {
+          // Estimate height based on text wrapping: ~20px per line
+          const estimatedLines = Math.ceil(cell.content.length / (optimalWidths[colIndex] / 8));
+          const estimatedHeight = Math.max(40, estimatedLines * 20 + 24);
+          maxHeight = Math.max(maxHeight, estimatedHeight);
+        } else if (cell && cell.type === CellType.IMAGE) {
+          maxHeight = Math.max(maxHeight, 150); // Fixed height for images
+        }
+      });
+      return maxHeight;
+    });
+
+    // Construct HTML structure with optimal sizing
     let tableHtml = `
       <h1 style="color: #818cf8; font-family: sans-serif; margin-bottom: 20px;">${sheetName}</h1>
       <table style="border-collapse: collapse; font-family: sans-serif; color: #e2e8f0;">
         <thead>
           <tr>
-            ${columns.map(c => `<th style="width: ${c.width}px; border: 1px solid #334155; padding: 12px; background: #0f172a; color: #94a3b8; text-transform: uppercase; font-size: 12px;">${c.label}</th>`).join('')}
+            ${columns.map((c, i) => `<th style="width: ${optimalWidths[i]}px; border: 1px solid #334155; padding: 12px; background: #0f172a; color: #94a3b8; text-transform: uppercase; font-size: 12px;">${c.label}</th>`).join('')}
           </tr>
         </thead>
         <tbody>
     `;
 
-    rows.forEach(r => {
-      tableHtml += `<tr style="height: ${r.height}px;">`;
-      columns.forEach(c => {
+    rows.forEach((r, rowIndex) => {
+      tableHtml += `<tr style="height: ${optimalHeights[rowIndex]}px;">`;
+      columns.forEach((c, colIndex) => {
         const cell = r.cells[c.id];
         let content = '';
         if (cell) {
-          if (cell.type === 'IMAGE' && cell.content) {
-            content = `<img src="${cell.content}" style="max-width: ${c.width - 24}px; max-height: ${r.height - 24}px; object-fit: contain;" />`;
+          if (cell.type === CellType.IMAGE && cell.content) {
+            content = `<img src="${cell.content}" style="max-width: ${optimalWidths[colIndex] - 24}px; max-height: ${optimalHeights[rowIndex] - 24}px; object-fit: contain;" />`;
           } else {
-            content = `<div style="white-space: pre-wrap; font-size: 14px;">${cell.content || ''}</div>`;
+            content = `<div style="white-space: pre-wrap; font-size: 14px; word-wrap: break-word;">${cell.content || ''}</div>`;
           }
         }
-        tableHtml += `<td style="border: 1px solid #334155; padding: 12px; vertical-align: top; background: #1e293b; width: ${c.width}px;">${content}</td>`;
+        tableHtml += `<td style="border: 1px solid #334155; padding: 12px; vertical-align: top; background: #1e293b; width: ${optimalWidths[colIndex]}px;">${content}</td>`;
       });
       tableHtml += '</tr>';
     });
@@ -614,18 +785,21 @@ export const Grid: React.FC = () => {
       const canvas = await html2canvas(tempContainer, {
         backgroundColor: '#0f172a',
         logging: false,
-        scale: 2 // Better resolution
+        scale: 1.5, // Balanced resolution vs file size
+        useCORS: true
       });
 
-      const imgData = canvas.toDataURL('image/png');
+      // Use JPEG for smaller file size
+      const imgData = canvas.toDataURL('image/jpeg', 0.85);
       const pdf = new jsPDF({
         orientation: canvas.width > canvas.height ? 'landscape' : 'portrait',
         unit: 'px',
-        format: [canvas.width, canvas.height] // Custom format to fit the table exactly
+        format: [canvas.width, canvas.height],
+        compress: true
       });
 
-      pdf.addImage(imgData, 'PNG', 0, 0, canvas.width, canvas.height);
-      pdf.save(`${sheetName.toLowerCase().replace(/\s+/g, '-')}.pdf`);
+      pdf.addImage(imgData, 'JPEG', 0, 0, canvas.width, canvas.height);
+      pdf.save(`${sheetName.toLowerCase().replace(/\\s+/g, '-')}.pdf`);
     } catch (err) {
       console.error("PDF Export failed", err);
       alert("Failed to export PDF");
@@ -730,7 +904,13 @@ export const Grid: React.FC = () => {
             {columns.map(col => (
               <div
                 key={col.id}
-                className="relative shrink-0 h-10 flex items-center justify-center border-r border-b border-slate-800 text-xs font-semibold text-slate-400 uppercase tracking-wider select-none group/header"
+                draggable={editingColumnId !== col.id}
+                onDragStart={(e) => handleColDragStart(e, col.id)}
+                onDragOver={(e) => handleColDragOver(e, col.id)}
+                onDragLeave={handleColDragLeave}
+                onDrop={(e) => handleColDrop(e, col.id)}
+                onDragEnd={handleColDragEnd}
+                className={`relative shrink-0 h-10 flex items-center justify-center border-r border-b border-slate-800 text-xs font-semibold text-slate-400 uppercase tracking-wider select-none group/header cursor-grab active:cursor-grabbing ${dropTargetColId === col.id ? 'bg-indigo-500/20 border-l-2 border-l-indigo-500' : ''} ${draggedColId === col.id ? 'opacity-50' : ''}`}
                 style={{ width: col.width }}
                 onDoubleClick={() => startEditingColumn(col.id, col.label)}
               >
@@ -800,14 +980,21 @@ export const Grid: React.FC = () => {
           {/* Rows */}
           <div className="relative">
             {rows.map((row, index) => (
-              <div key={row.id} className="flex relative group/row">
+              <div key={row.id} className={`flex relative group/row ${dropTargetRowId === row.id ? 'border-t-2 border-t-indigo-500' : ''} ${draggedRowId === row.id ? 'opacity-50' : ''}`}>
 
-                {/* Row Header (Number + Resize) */}
+                {/* Row Header (Number + Drag + Resize) */}
                 <div
-                  className="sticky left-0 z-10 w-12 shrink-0 bg-slate-900 border-r border-b border-slate-800 flex items-center justify-center text-xs text-slate-500 font-mono select-none"
+                  draggable
+                  onDragStart={(e) => handleRowDragStart(e, row.id)}
+                  onDragOver={(e) => handleRowDragOver(e, row.id)}
+                  onDragLeave={handleRowDragLeave}
+                  onDrop={(e) => handleRowDrop(e, row.id)}
+                  onDragEnd={handleRowDragEnd}
+                  className="sticky left-0 z-10 w-12 shrink-0 bg-slate-900 border-r border-b border-slate-800 flex items-center justify-center gap-0.5 text-xs text-slate-500 font-mono select-none cursor-grab active:cursor-grabbing group/rowheader"
                   style={{ height: row.height }}
                 >
-                  {index + 1}
+                  <GripVertical size={12} className="opacity-0 group-hover/rowheader:opacity-50 transition-opacity" />
+                  <span>{index + 1}</span>
                   <ResizeHandle
                     orientation="vertical"
                     onResize={(delta) => handleRowResize(row.id, delta)}
