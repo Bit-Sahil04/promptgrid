@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { GridColumn, GridRow, GridCell, CellType } from '../types';
 import { Cell } from './Cell';
 import { ResizeHandle } from './ResizeHandle';
@@ -6,6 +6,7 @@ import { Plus, Download, FileJson, FileSpreadsheet, FileCode, ChevronDown, X, Fi
 import * as XLSX from 'xlsx';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
+import { saveImage, getAllImages, deleteImage } from '../services/imageStorage';
 
 const DEFAULT_COL_WIDTH = 200;
 const DEFAULT_ROW_HEIGHT = 150;
@@ -48,67 +49,144 @@ export const Grid: React.FC = () => {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [rows]);
 
-  // Initialize Grid - Load from localStorage or create new
+  // Initialize Grid - Load from localStorage and IndexedDB
   useEffect(() => {
-    const savedData = localStorage.getItem(LOCAL_STORAGE_KEY);
+    const loadData = async () => {
+      const savedData = localStorage.getItem(LOCAL_STORAGE_KEY);
+      let loadedRows: GridRow[] | null = null;
+      let loadedCols: GridColumn[] | null = null;
+      let loadedSheetName = 'PromptGrid';
 
-    if (savedData) {
-      try {
-        const parsed = JSON.parse(savedData);
-        if (parsed.columns && parsed.rows) {
-          setColumns(parsed.columns);
-          setRows(parsed.rows);
-          if (parsed.sheetName) {
-            setSheetName(parsed.sheetName);
+      if (savedData) {
+        try {
+          const parsed = JSON.parse(savedData);
+          if (parsed.columns && parsed.rows) {
+            loadedCols = parsed.columns;
+            loadedRows = parsed.rows;
+            if (parsed.sheetName) {
+              loadedSheetName = parsed.sheetName;
+            }
           }
-          return; // Data loaded successfully, skip initialization
+        } catch (e) {
+          console.warn('Failed to load saved data from localStorage:', e);
         }
-      } catch (e) {
-        console.warn('Failed to load saved data from localStorage:', e);
       }
-    }
 
-    // No saved data or failed to load - initialize fresh grid
-    const initCols: GridColumn[] = Array.from({ length: INITIAL_COLS }).map((_, i) => ({
-      id: generateId(),
-      label: `Col ${i + 1}`,
-      width: DEFAULT_COL_WIDTH
-    }));
+      // Load images from IndexedDB and merge with rows
+      if (loadedRows) {
+        try {
+          const imageMap = await getAllImages();
 
-    const initRows: GridRow[] = Array.from({ length: INITIAL_ROWS }).map(() => ({
-      id: generateId(),
-      height: DEFAULT_ROW_HEIGHT,
-      cells: {}
-    }));
+          // Merge images back into rows
+          loadedRows = loadedRows.map(row => ({
+            ...row,
+            cells: Object.fromEntries(
+              Object.entries(row.cells).map(([colId, cell]: [string, GridCell]) => {
+                // Check if this cell has an image stored in IndexedDB
+                const storedImage = imageMap.get(cell.id);
+                if (storedImage) {
+                  return [colId, { ...cell, type: CellType.IMAGE, content: storedImage }];
+                }
+                // If cell content is placeholder, clear it
+                if (cell.content === '[IMAGE_TOO_LARGE]') {
+                  return [colId, { ...cell, type: CellType.TEXT, content: '' }];
+                }
+                return [colId, cell];
+              })
+            )
+          }));
+        } catch (e) {
+          console.warn('Failed to load images from IndexedDB:', e);
+        }
 
-    // Pre-populate cells map structure
-    initRows.forEach(row => {
-      initCols.forEach(col => {
-        row.cells[col.id] = {
-          id: generateId(),
-          type: CellType.TEXT,
-          content: ''
-        };
+        setColumns(loadedCols!);
+        setRows(loadedRows);
+        setSheetName(loadedSheetName);
+        return;
+      }
+
+      // No saved data or failed to load - initialize fresh grid
+      const initCols: GridColumn[] = Array.from({ length: INITIAL_COLS }).map((_, i) => ({
+        id: generateId(),
+        label: `Col ${i + 1}`,
+        width: DEFAULT_COL_WIDTH
+      }));
+
+      const initRows: GridRow[] = Array.from({ length: INITIAL_ROWS }).map(() => ({
+        id: generateId(),
+        height: DEFAULT_ROW_HEIGHT,
+        cells: {}
+      }));
+
+      // Pre-populate cells map structure
+      initRows.forEach(row => {
+        initCols.forEach(col => {
+          row.cells[col.id] = {
+            id: generateId(),
+            type: CellType.TEXT,
+            content: ''
+          };
+        });
       });
-    });
 
-    setColumns(initCols);
-    setRows(initRows);
+      setColumns(initCols);
+      setRows(initRows);
+    };
+
+    loadData();
   }, []);
 
-  // Save to localStorage whenever data changes
+  // Save to localStorage and IndexedDB whenever data changes
   useEffect(() => {
     // Don't save if grid hasn't been initialized yet
     if (columns.length === 0 && rows.length === 0) return;
 
-    const dataToSave = {
-      columns,
-      rows,
-      sheetName,
-      savedAt: new Date().toISOString()
+    // Save images to IndexedDB and prepare rows for localStorage
+    const saveData = async () => {
+      const rowsForStorage = await Promise.all(
+        rows.map(async (row) => {
+          const cellEntries = await Promise.all(
+            Object.entries(row.cells).map(async ([colId, cell]: [string, GridCell]) => {
+              // If it's an image, save to IndexedDB
+              if (cell.type === CellType.IMAGE && cell.content && cell.content.startsWith('data:')) {
+                try {
+                  await saveImage(cell.id, cell.content);
+                  // Store a placeholder in localStorage
+                  return [colId, { ...cell, content: '[INDEXED_DB]' }];
+                } catch (e) {
+                  console.warn('Failed to save image to IndexedDB:', e);
+                  return [colId, cell];
+                }
+              }
+              return [colId, cell];
+            })
+          );
+          return {
+            ...row,
+            cells: Object.fromEntries(cellEntries)
+          };
+        })
+      );
+
+      const dataToSave = {
+        columns,
+        rows: rowsForStorage,
+        sheetName,
+        savedAt: new Date().toISOString()
+      };
+
+      try {
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(dataToSave));
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'QuotaExceededError') {
+          console.warn('localStorage quota exceeded. Data saved to IndexedDB.');
+        } else {
+          console.error('Failed to save to localStorage:', error);
+        }
+      }
     };
 
-    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(dataToSave));
+    saveData();
   }, [columns, rows, sheetName]);
 
   const handleColResize = (colId: string, delta: number) => {
