@@ -1,0 +1,5 @@
+{
+  "name": "PromptGrid AI",
+  "description": "An Excel-like interface optimized for managing AI prompts and generated images with resizeable grids and Gemini integration.",
+  "requestFramePermissions": []
+}
